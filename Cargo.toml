@@ -1,0 +1,12 @@
+[package]
+name = "ec_huffman"
+version = "0.1.0"
+authors = ["Iszak Bryan <iszak.bryan@gmail.com>"]
+edition = "2018"
+
+[[bench]]
+name = "benches"
+harness = false
+
+[dev-dependencies]
+bencher = "0.1"
