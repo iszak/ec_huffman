@@ -14,8 +14,7 @@ pub type DecodeCodebook<S, W> = HashMap<String, (S, W)>;
 
 #[derive(Debug)]
 struct Node<S, W> {
-    left: Option<usize>,
-    right: Option<usize>,
+    children: Vec<usize>,
     data: NodeData<S, W>,
 }
 
@@ -110,36 +109,26 @@ fn assign_codes<S: Eq + Hash + Clone, W: Ord + Clone>(
     encode_book: &mut EncodeCodebook<S>,
     decode_book: &mut DecodeCodebook<S, W>,
 ) -> () {
-    match node.left {
-        Some(left_node_index) => {
-            assign_code(
-                nodes,
-                nodes.get(left_node_index).unwrap(),
-                encode_book,
-                decode_book,
-                &current_code,
-                "0",
-            );
-        }
-        None => {}
-    }
-    match node.right {
-        Some(right_node_index) => {
-            assign_code(
-                nodes,
-                nodes.get(right_node_index).unwrap(),
-                encode_book,
-                decode_book,
-                &current_code,
-                "1",
-            );
-        }
-        None => {}
+    let mut index = 0;
+    for node_index in node.children.iter() {
+        // TODO: Make generic
+        let suffix_code: u32 = (index % 2) as u32;
+        assign_code(
+            nodes,
+            nodes.get(*node_index).unwrap(),
+            encode_book,
+            decode_book,
+            &current_code,
+            &suffix_code.to_string(),
+        );
+
+        index += 1;
     }
 }
 
 fn create_books<S: Hash + Eq + Debug + Ord + Clone, W: Debug + Ord + Clone + Add<Output = W>>(
     frequency_table: BinaryHeap<HeapData<S, W>>,
+    nodes: usize,
 ) -> (EncodeCodebook<S>, DecodeCodebook<S, W>) {
     let len = frequency_table.len();
 
@@ -152,8 +141,7 @@ fn create_books<S: Hash + Eq + Debug + Ord + Clone, W: Debug + Ord + Clone + Add
 
     for (index, entry) in frequency_table.into_sorted_vec().iter().enumerate() {
         all_nodes.push(Node {
-            left: None,
-            right: None,
+            children: Vec::with_capacity(nodes),
             data: NodeData::Leaf(Leaf {
                 code: None,
                 symbol: entry.symbol.clone(),
@@ -178,11 +166,31 @@ fn create_books<S: Hash + Eq + Debug + Ord + Clone, W: Debug + Ord + Clone + Add
                 break;
             }
             _ => {
-                // 1. Remove the two nodes of highest priority (lowest probability) from the queue
-                let node_left = current_nodes.pop().unwrap();
-                let node_right = current_nodes.pop().unwrap();
+                // 1. Remove the N nodes of highest priority (lowest probability) from the queue
+                let mut weight_accumulator: Option<W> = None;
+                let mut children: Vec<usize> = Vec::with_capacity(nodes);
 
-                let weight = node_left.weight + node_right.weight;
+                let mut index = 0;
+                loop {
+                    if index == nodes {
+                        break;
+                    }
+
+                    let node_pointer = match current_nodes.pop() {
+                        Some(np) => np,
+                        None => break,
+                    };
+
+                    children.push(node_pointer.index);
+                    weight_accumulator = match weight_accumulator {
+                        None => Some(node_pointer.weight.clone()),
+                        Some(w) => Some(node_pointer.weight.clone() + w),
+                    };
+
+                    index += 1;
+                }
+
+                let weight = weight_accumulator.unwrap();
 
                 let new_index = all_nodes.len();
 
@@ -190,8 +198,7 @@ fn create_books<S: Hash + Eq + Debug + Ord + Clone, W: Debug + Ord + Clone + Add
                 // probability equal to the sum of the two nodes' probabilities.
                 // Add the new node to the queue.
                 all_nodes.push(Node {
-                    left: Some(node_left.index),
-                    right: Some(node_right.index),
+                    children: children,
                     data: NodeData::Internal(Internal {
                         weight: weight.clone(),
                         index: new_index,
@@ -317,7 +324,7 @@ pub fn from_iter<
         });
     }
 
-    create_books(heap)
+    create_books(heap, 2)
 }
 
 #[cfg(test)]
