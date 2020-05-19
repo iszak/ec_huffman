@@ -85,7 +85,7 @@ struct HeapData<S, W> {
 
 // TODO:
 // - Allow replacing code generator to allow Length-limited Huffman coding
-fn assign_code<S: Eq + Hash + Clone, W: Ord + Clone>(
+fn assign_code<S: Debug + Eq + Hash + Clone, W: Debug + Ord + Clone>(
     nodes: &Vec<Node<S, W>>,
     node: &Node<S, W>,
     encode_book: &mut EncodeCodebook<S>,
@@ -95,14 +95,26 @@ fn assign_code<S: Eq + Hash + Clone, W: Ord + Clone>(
 ) -> () {
     let new_code = current_code.to_string() + suffix_code;
     if let NodeData::Leaf(data) = &node.data {
-        encode_book.insert(data.symbol.clone(), new_code.clone());
-        decode_book.insert(new_code.clone(), (data.symbol.clone(), data.weight.clone()));
+        match encode_book.insert(data.symbol.clone(), new_code.clone()) {
+            Some(_) => panic!(format!(
+                "symbol {:?} already exists in encode book",
+                data.symbol
+            )),
+            None => {}
+        }
+        match decode_book.insert(new_code.clone(), (data.symbol.clone(), data.weight.clone())) {
+            Some(_) => panic!(format!(
+                "code {:?} already exists in decode book",
+                data.symbol
+            )),
+            None => {}
+        };
     }
 
     assign_codes(nodes, node, &new_code, encode_book, decode_book);
 }
 
-fn assign_codes<S: Eq + Hash + Clone, W: Ord + Clone>(
+fn assign_codes<S: Debug + Clone + Eq + Hash, W: Debug + Clone + Ord>(
     nodes: &Vec<Node<S, W>>,
     node: &Node<S, W>,
     current_code: &str,
