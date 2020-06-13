@@ -20,9 +20,16 @@ struct Node<S, W> {
 
 #[derive(Debug)]
 struct NodePointer<S, W> {
-    symbol: Option<S>,
     weight: W,
+    node_type: NodeType,
+    symbol: Option<S>,
     index: usize,
+}
+
+#[derive(Debug, PartialEq)]
+enum NodeType {
+    Leaf,
+    Internal,
 }
 
 impl<S: Ord + Clone, W: Ord + Clone> Eq for NodePointer<S, W> {}
@@ -35,6 +42,14 @@ impl<S: Ord + Clone, W: Ord + Clone> PartialEq for NodePointer<S, W> {
 
 impl<S: Ord + Clone, W: Ord + Clone> Ord for NodePointer<S, W> {
     fn cmp(&self, other: &Self) -> Ordering {
+        if &self.node_type == &NodeType::Internal && &other.node_type != &NodeType::Internal {
+            // Internal nodes are always to the right
+            return Ordering::Greater;
+        } else if &self.node_type == &NodeType::Leaf && &other.node_type == &NodeType::Internal {
+            // Leaf nodes are to the left
+            return Ordering::Less;
+        }
+
         let w1 = &self.weight;
         let w2 = &other.weight;
 
@@ -83,17 +98,41 @@ struct HeapData<S, W> {
     symbol: S,
 }
 
+struct CodeGenerator {
+    last_code: u32,
+    current_code: String,
+}
+
+impl CodeGenerator {
+    fn next(&mut self) -> String {
+        if self.last_code == 0 {
+            self.last_code = 1;
+            return self.current_code.to_owned() + "1";
+        } else {
+            self.last_code = 0;
+            return self.current_code.to_owned() + "0";
+        }
+    }
+
+    fn dive(&mut self) {
+        if self.last_code == 1 {
+            self.current_code.push('1');
+        } else {
+            self.current_code.push('0');
+        }
+    }
+}
+
 // TODO:
 // - Allow replacing code generator to allow Length-limited Huffman coding
 fn assign_code<S: Debug + Eq + Hash + Clone, W: Debug + Ord + Clone>(
-    nodes: &Vec<Node<S, W>>,
     node: &Node<S, W>,
     encode_book: &mut EncodeCodebook<S>,
     decode_book: &mut DecodeCodebook<S, W>,
-    current_code: &str,
-    suffix_code: &str,
+    code_generator: &mut CodeGenerator,
 ) -> () {
-    let new_code = current_code.to_string() + suffix_code;
+    let new_code = code_generator.next();
+
     if let NodeData::Leaf(data) = &node.data {
         match encode_book.insert(data.symbol.clone(), new_code.clone()) {
             Some(_) => panic!(format!(
@@ -110,31 +149,23 @@ fn assign_code<S: Debug + Eq + Hash + Clone, W: Debug + Ord + Clone>(
             None => {}
         };
     }
-
-    assign_codes(nodes, node, &new_code, encode_book, decode_book);
 }
 
 fn assign_codes<S: Debug + Clone + Eq + Hash, W: Debug + Clone + Ord>(
     nodes: &Vec<Node<S, W>>,
     node: &Node<S, W>,
-    current_code: &str,
     encode_book: &mut EncodeCodebook<S>,
     decode_book: &mut DecodeCodebook<S, W>,
+    code_generator: &mut CodeGenerator,
 ) -> () {
-    let mut index = 0;
     for node_index in node.children.iter() {
-        // TODO: Make generic
-        let suffix_code: u32 = (index % 2) as u32;
-        assign_code(
-            nodes,
-            nodes.get(*node_index).unwrap(),
-            encode_book,
-            decode_book,
-            &current_code,
-            &suffix_code.to_string(),
-        );
+        let child_node = nodes.get(*node_index).unwrap();
+        assign_code(child_node, encode_book, decode_book, code_generator);
 
-        index += 1;
+        if child_node.children.len() > 0 {
+            code_generator.dive();
+            assign_codes(nodes, child_node, encode_book, decode_book, code_generator);
+        }
     }
 }
 
@@ -164,6 +195,7 @@ fn create_books<S: Hash + Eq + Debug + Ord + Clone, W: Debug + Ord + Clone + Add
         current_nodes.push(NodePointer {
             symbol: Some(entry.symbol.clone()),
             weight: entry.weight.clone(),
+            node_type: NodeType::Leaf,
             index: index,
         });
     }
@@ -193,7 +225,8 @@ fn create_books<S: Hash + Eq + Debug + Ord + Clone, W: Debug + Ord + Clone + Add
                         None => break,
                     };
 
-                    children.push(node_pointer.index);
+                    children.insert(0, node_pointer.index);
+
                     weight_accumulator = match weight_accumulator {
                         None => Some(node_pointer.weight.clone()),
                         Some(w) => Some(node_pointer.weight.clone() + w),
@@ -206,7 +239,7 @@ fn create_books<S: Hash + Eq + Debug + Ord + Clone, W: Debug + Ord + Clone + Add
 
                 let new_index = all_nodes.len();
 
-                // Create a new internal node with these two nodes as children and with
+                // Create a new internal node with N nodes as children and with
                 // probability equal to the sum of the two nodes' probabilities.
                 // Add the new node to the queue.
                 all_nodes.push(Node {
@@ -221,6 +254,7 @@ fn create_books<S: Hash + Eq + Debug + Ord + Clone, W: Debug + Ord + Clone + Add
                     symbol: None,
                     weight: weight.clone(),
                     index: new_index,
+                    node_type: NodeType::Internal,
                 });
             }
         }
@@ -236,13 +270,17 @@ fn create_books<S: Hash + Eq + Debug + Ord + Clone, W: Debug + Ord + Clone + Add
 
     let mut encode_book: EncodeCodebook<S> = EncodeCodebook::with_capacity(len);
     let mut decode_book: DecodeCodebook<S, W> = DecodeCodebook::with_capacity(len);
+    let mut code_generator = CodeGenerator {
+        last_code: 1,
+        current_code: "".to_owned(),
+    };
 
     assign_codes(
         &all_nodes,
         &root_node,
-        "",
         &mut encode_book,
         &mut decode_book,
+        &mut code_generator,
     );
 
     return (encode_book, decode_book);
@@ -344,19 +382,39 @@ mod tests {
     use super::*;
 
     #[test]
-    fn encode() {
+    fn encode1() {
+        // a1:0.4, a2:0.35, a3:0.2, a4:0.05
+        let mut map: HashMap<&str, usize> = HashMap::new();
+        map.insert("a1", 40); // 0
+        map.insert("a2", 35); // 11
+        map.insert("a3", 20); // 10
+        map.insert("a4", 5); // 10
+
+        let (encode_book, _) = from_iter(map.iter());
+        assert_eq!(encode_symbols(&encode_book, &vec!["a1"]).join(""), "0");
+        assert_eq!(encode_symbols(&encode_book, &vec!["a2"]).join(""), "10");
+        assert_eq!(encode_symbols(&encode_book, &vec!["a3"]).join(""), "110");
+        assert_eq!(encode_symbols(&encode_book, &vec!["a4"]).join(""), "111");
+        assert_eq!(
+            encode_symbols(&encode_book, &vec!["a1", "a2", "a3", "a4"]).join(""),
+            "010110111"
+        );
+    }
+
+    #[test]
+    fn encode2() {
         let mut map: HashMap<&str, usize> = HashMap::new();
         map.insert("a", 3); // 0
-        map.insert("b", 2); // 11
-        map.insert("c", 1); // 10
+        map.insert("b", 2); // 10
+        map.insert("c", 1); // 11
 
         let (encode_book, _) = from_iter(map.iter());
         assert_eq!(encode_symbols(&encode_book, &vec!["a"]).join(""), "0");
-        assert_eq!(encode_symbols(&encode_book, &vec!["b"]).join(""), "11");
-        assert_eq!(encode_symbols(&encode_book, &vec!["c"]).join(""), "10");
+        assert_eq!(encode_symbols(&encode_book, &vec!["b"]).join(""), "10");
+        assert_eq!(encode_symbols(&encode_book, &vec!["c"]).join(""), "11");
         assert_eq!(
             encode_symbols(&encode_book, &vec!["a", "a", "a", "b", "c"]).join(""),
-            "0001110"
+            "0001011"
         );
     }
 
@@ -364,28 +422,28 @@ mod tests {
     fn decode_code_unique_weights() {
         let mut map: HashMap<&str, usize> = HashMap::new();
         map.insert("a", 3); // 0
-        map.insert("b", 2); // 11
-        map.insert("c", 1); // 10
+        map.insert("b", 2); // 10
+        map.insert("c", 1); // 11
 
         let (_, decode_book) = from_iter(map.iter());
         assert_eq!(decode_str(&decode_book, "0").join(""), "a");
-        assert_eq!(decode_str(&decode_book, "11").join(""), "b");
-        assert_eq!(decode_str(&decode_book, "10").join(""), "c");
-        assert_eq!(decode_str(&decode_book, "000111110").join(""), "aaabbc");
+        assert_eq!(decode_str(&decode_book, "10").join(""), "b");
+        assert_eq!(decode_str(&decode_book, "11").join(""), "c");
+        assert_eq!(decode_str(&decode_book, "000101011").join(""), "aaabbc");
     }
 
     #[test]
     fn decode_code_duplicate_weights() {
         let mut map: HashMap<&str, usize> = HashMap::new();
-        map.insert("a", 1); // 1
-        map.insert("b", 1); // 01
+        map.insert("a", 1); // 111
+        map.insert("b", 1); // 110
         map.insert("c", 1); // 10
-        map.insert("d", 1); // 11
+        map.insert("d", 1); // 0
 
         let (_, decode_book) = from_iter(map.iter());
-        assert_eq!(decode_str(&decode_book, "00").join(""), "a");
+        assert_eq!(decode_str(&decode_book, "111").join(""), "a");
         assert_eq!(
-            decode_str(&decode_book, "00000000010101101011").join(""),
+            decode_str(&decode_book, "11111111111111011011010100").join(""),
             "aaaabbbccd"
         );
     }
