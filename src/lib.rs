@@ -3,6 +3,7 @@ use std::cmp::Reverse;
 
 use std::fmt::Debug;
 use std::hash::Hash;
+use std::iter::IntoIterator;
 use std::iter::Iterator;
 use std::ops::Add;
 use std::str::Chars;
@@ -401,16 +402,13 @@ pub fn from_iter<
     'a,
     S: 'a + Debug + Ord + Clone + Hash,
     W: 'a + Debug + Ord + Clone + Add<Output = W>,
-    I: Iterator<Item = (&'a S, &'a W)>,
+    I: IntoIterator<Item = (&'a S, &'a W)> + ExactSizeIterator,
 >(
-    map: I,
+    iter: I,
 ) -> (EncodeCodebook<S>, DecodeCodebook<S, W>) {
-    let mut heap = match map.size_hint() {
-        (_, Some(upper)) => BinaryHeap::with_capacity(upper),
-        (lower, None) => BinaryHeap::with_capacity(lower),
-    };
+    let mut heap = BinaryHeap::with_capacity(iter.len());
 
-    for (symbol, weight) in map {
+    for (symbol, weight) in iter {
         heap.push(HeapData {
             symbol: symbol.clone(),
             weight: weight.clone(),
