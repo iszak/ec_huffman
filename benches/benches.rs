@@ -1,11 +1,10 @@
-#[macro_use]
-extern crate bencher;
+extern crate criterion;
 extern crate ec_huffman;
 
-use bencher::{black_box, Bencher};
+use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use std::collections::HashMap;
 
-fn bench_encode_decode(b: &mut Bencher) {
+fn criterion_benchmark(c: &mut Criterion) {
     let mut map: HashMap<&str, usize> = HashMap::new();
     map.insert("AA", 54);
     map.insert("AB", 9);
@@ -684,27 +683,37 @@ fn bench_encode_decode(b: &mut Bencher) {
     map.insert("ZY", 58);
     map.insert("ZZ", 25);
 
+    c.bench_function("from_iter", |b| {
+        b.iter(|| ec_huffman::from_iter(map.iter()))
+    });
+
     let (encode_book, decode_book) = ec_huffman::from_iter(map.iter());
 
-    let c: Vec<&&str> = map.keys().collect();
-    let example = black_box(c);
-    let mut buffer: Vec<&String> = Vec::new();
-    for symbol in &example {
-        encode_book.encode_symbol_from_buffer(*symbol, &mut buffer);
-    }
+    let codes: Vec<&&str> = black_box(map.keys().collect());
+    let mut buffer: Vec<&String> = black_box(Vec::new());
+    c.bench_function("encode_symbol_from_buffer", |b| {
+        b.iter(|| {
+            buffer.truncate(0);
+            for symbol in &codes {
+                encode_book.encode_symbol_from_buffer(*symbol, &mut buffer);
+            }
+        })
+    });
 
-    let mut buffer2 = String::new();
-    for symbol in &example {
+    let mut buffer2 = black_box(String::new());
+    for symbol in &codes {
         buffer2 += encode_book.encode_symbol(*symbol).unwrap();
     }
-    b.iter(|| {
-        assert!(example
-            .iter()
-            .zip(decode_book.decode_iter(&buffer2))
-            .all(|(l, r)| *l == &r));
+
+    c.bench_function("decode_str", |b| {
+        b.iter(|| {
+            assert!(codes
+                .iter()
+                .zip(decode_book.decode_str(&buffer2))
+                .all(|(l, r)| *l == &r));
+        })
     });
 }
 
-benchmark_group!(benches, bench_encode_decode);
-
-benchmark_main!(benches);
+criterion_group!(benches, criterion_benchmark);
+criterion_main!(benches);

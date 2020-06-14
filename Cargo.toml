@@ -9,4 +9,4 @@ name = "benches"
 harness = false
 
 [dev-dependencies]
-bencher = "0.1"
+criterion = "0.3"
