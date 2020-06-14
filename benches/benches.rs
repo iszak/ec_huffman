@@ -690,17 +690,17 @@ fn bench_encode_decode(b: &mut Bencher) {
     let example = black_box(c);
     let mut buffer: Vec<&String> = Vec::new();
     for symbol in &example {
-        ec_huffman::encode_symbol_from_buffer(&encode_book, *symbol, &mut buffer);
+        encode_book.encode_symbol_from_buffer(*symbol, &mut buffer);
     }
 
     let mut buffer2 = String::new();
     for symbol in &example {
-        buffer2 += ec_huffman::encode_symbol(&encode_book, *symbol).unwrap();
+        buffer2 += encode_book.encode_symbol(*symbol).unwrap();
     }
     b.iter(|| {
         assert!(example
             .iter()
-            .zip(ec_huffman::decode_iter(&decode_book, &buffer2))
+            .zip(decode_book.decode_iter(&buffer2))
             .all(|(l, r)| *l == &r));
     });
 }

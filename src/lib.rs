@@ -10,21 +10,110 @@ use std::str::Chars;
 use std::collections::BinaryHeap;
 use std::collections::HashMap;
 
-pub type EncodeCodebook<S> = HashMap<S, String>;
-pub type DecodeCodebook<S, W> = HashMap<String, (S, W)>;
+pub type InternalEncodeCodebook<S> = HashMap<S, String>;
+pub type InternalDecodeCodebook<S, W> = HashMap<String, (S, W)>;
 
-pub struct DecodeCodebook2<S, W> {
-    book: DecodeCodebook<S, W>,
+pub struct Encoder<'a, S, I: Iterator<Item = &'a S>> {
+    codebook: &'a InternalEncodeCodebook<S>,
+    iterator: &'a mut I,
+}
+
+impl<'a, S: Clone + Eq + Hash, I: Iterator<Item = &'a S>> Iterator for Encoder<'a, S, I> {
+    type Item = String;
+
+    fn next(&mut self) -> Option<String> {
+        match self.iterator.next() {
+            Some(symbol) => match self.codebook.get(&symbol) {
+                Some(code) => Some(code.clone()),
+                None => None,
+            },
+            None => return None,
+        }
+    }
+}
+
+pub struct EncodeCodebook<S> {
+    book: InternalEncodeCodebook<S>,
+}
+
+impl<'a, S: Eq + Hash + Clone> EncodeCodebook<S> {
+    pub fn encode_symbols_from_iter<I: Iterator<Item = &'a S>>(
+        &'a self,
+        iter: &'a mut I,
+    ) -> Encoder<'a, S, I> {
+        return Encoder {
+            codebook: &self.book,
+            iterator: iter,
+        };
+    }
+
+    pub fn encode_symbols(&'a self, symbols: &Vec<S>) -> Vec<String> {
+        return self.encode_symbols_from_iter(&mut symbols.iter()).collect();
+    }
+
+    pub fn encode_symbol(&'a self, symbol: &S) -> Option<&'a String> {
+        return self.book.get(symbol);
+    }
+
+    pub fn encode_symbol_from_buffer(&'a self, symbol: &S, buffer: &mut Vec<&'a String>) -> () {
+        match self.book.get(symbol) {
+            Some(code) => buffer.push(code),
+            None => {}
+        };
+    }
+}
+
+pub struct DecodeCodebook<S, W> {
+    book: InternalDecodeCodebook<S, W>,
     max_code_len: usize,
 }
 
-impl<S, W> DecodeCodebook2<S, W> {
+pub struct Decoder<'a, S: Clone, W> {
+    codebook: &'a DecodeCodebook<S, W>,
+    iterator: Chars<'a>,
+}
+
+impl<'a, S: Clone, W> Iterator for Decoder<'a, S, W> {
+    type Item = S;
+
+    fn next(&mut self) -> Option<S> {
+        // TODO: Allocate string of size string.len() / max_code_len() * max_symbol_len()
+        let mut code: String = String::with_capacity(100);
+
+        loop {
+            match self.iterator.next() {
+                Some(c) => code.push(c),
+                None => return None,
+            }
+
+            match self.codebook.get(&code) {
+                Some(a) => {
+                    return Some(a.0.clone());
+                }
+                None => continue,
+            }
+        }
+    }
+}
+
+impl<'a, S: Clone, W> DecodeCodebook<S, W> {
     fn get(&self, code: &String) -> Option<&(S, W)> {
         if code.len() > self.max_code_len {
             return None;
         }
 
         return self.book.get(code);
+    }
+
+    pub fn decode_iter(&'a self, string: &'a str) -> Decoder<'a, S, W> {
+        return Decoder {
+            codebook: &self,
+            iterator: string.chars(),
+        };
+    }
+
+    pub fn decode_str(&self, string: &str) -> Vec<S> {
+        return self.decode_iter(string).collect();
     }
 }
 
@@ -141,8 +230,8 @@ impl CodeGenerator {
 
 fn assign_code<S: Debug + Eq + Hash + Clone, W: Debug + Ord + Clone>(
     node: &Node<S, W>,
-    encode_book: &mut EncodeCodebook<S>,
-    decode_book: &mut DecodeCodebook<S, W>,
+    encode_book: &mut InternalEncodeCodebook<S>,
+    decode_book: &mut InternalDecodeCodebook<S, W>,
     code_generator: &mut CodeGenerator,
 ) -> () {
     let new_code = code_generator.next();
@@ -168,8 +257,8 @@ fn assign_code<S: Debug + Eq + Hash + Clone, W: Debug + Ord + Clone>(
 fn assign_codes<S: Debug + Clone + Eq + Hash, W: Debug + Clone + Ord>(
     nodes: &Vec<Node<S, W>>,
     node: &Node<S, W>,
-    encode_book: &mut EncodeCodebook<S>,
-    decode_book: &mut DecodeCodebook<S, W>,
+    encode_book: &mut InternalEncodeCodebook<S>,
+    decode_book: &mut InternalDecodeCodebook<S, W>,
     code_generator: &mut CodeGenerator,
 ) -> () {
     for node_index in node.children.iter() {
@@ -186,7 +275,7 @@ fn assign_codes<S: Debug + Clone + Eq + Hash, W: Debug + Clone + Ord>(
 fn create_books<S: Hash + Eq + Debug + Ord + Clone, W: Debug + Ord + Clone + Add<Output = W>>(
     frequency_table: BinaryHeap<HeapData<S, W>>,
     nodes: usize,
-) -> (EncodeCodebook<S>, DecodeCodebook2<S, W>) {
+) -> (EncodeCodebook<S>, DecodeCodebook<S, W>) {
     let len = frequency_table.len();
 
     // 1. Create a leaf node for each symbol and add it to the priority queue.
@@ -282,8 +371,8 @@ fn create_books<S: Hash + Eq + Debug + Ord + Clone, W: Debug + Ord + Clone + Add
         None => panic!("root node not found"),
     };
 
-    let mut encode_book: EncodeCodebook<S> = EncodeCodebook::with_capacity(len);
-    let mut decode_book: DecodeCodebook<S, W> = DecodeCodebook::with_capacity(len);
+    let mut encode_book: InternalEncodeCodebook<S> = InternalEncodeCodebook::with_capacity(len);
+    let mut decode_book: InternalDecodeCodebook<S, W> = InternalDecodeCodebook::with_capacity(len);
     let mut code_generator = CodeGenerator {
         last_code: 1,
         current_code: "".to_owned(),
@@ -300,111 +389,12 @@ fn create_books<S: Hash + Eq + Debug + Ord + Clone, W: Debug + Ord + Clone + Add
     let max_code_len = decode_book.keys().max_by_key(|k| k.len()).unwrap().len();
 
     return (
-        encode_book,
-        DecodeCodebook2 {
+        EncodeCodebook { book: encode_book },
+        DecodeCodebook {
             book: decode_book,
             max_code_len: max_code_len,
         },
     );
-}
-
-pub fn encode_symbols_from_iter<'a, S: Eq + Debug + Clone + Hash, I: Iterator<Item = &'a S>>(
-    codebook: &'a EncodeCodebook<S>,
-    iter: &'a mut I,
-) -> Encoder<'a, S, I> {
-    return Encoder {
-        codebook: codebook,
-        iterator: iter,
-    };
-}
-
-pub fn encode_symbols<S: Eq + Debug + Clone + Hash>(
-    codebook: &EncodeCodebook<S>,
-    symbols: &Vec<S>,
-) -> Vec<String> {
-    return encode_symbols_from_iter(codebook, &mut symbols.iter()).collect();
-}
-
-pub fn encode_symbol<'a, S: Eq + Debug + Clone + Hash>(
-    codebook: &'a EncodeCodebook<S>,
-    symbol: &S,
-) -> Option<&'a String> {
-    codebook.get(symbol)
-}
-
-pub fn encode_symbol_from_buffer<'a, S: Eq + Debug + Clone + Hash>(
-    codebook: &'a EncodeCodebook<S>,
-    symbol: &S,
-    buffer: &mut Vec<&'a String>,
-) -> () {
-    match codebook.get(symbol) {
-        Some(code) => buffer.push(code),
-        None => {}
-    };
-}
-
-pub struct Encoder<'a, S, I: Iterator<Item = &'a S>> {
-    codebook: &'a EncodeCodebook<S>,
-    iterator: &'a mut I,
-}
-
-impl<'a, S: Clone + Eq + Hash, I: Iterator<Item = &'a S>> Iterator for Encoder<'a, S, I> {
-    type Item = String;
-
-    fn next(&mut self) -> Option<String> {
-        match self.iterator.next() {
-            Some(symbol) => match self.codebook.get(&symbol) {
-                Some(code) => Some(code.clone()),
-                None => None,
-            },
-            None => return None,
-        }
-    }
-}
-
-pub struct Decoder<'a, S: Clone, W> {
-    codebook: &'a DecodeCodebook2<S, W>,
-    iterator: Chars<'a>,
-}
-
-impl<'a, S: Clone, W> Iterator for Decoder<'a, S, W> {
-    type Item = S;
-
-    fn next(&mut self) -> Option<S> {
-        // TODO: Allocate string of size string.len() / max_code_len() * max_symbol_len()
-        let mut code: String = String::with_capacity(100);
-
-        loop {
-            match self.iterator.next() {
-                Some(c) => code.push(c),
-                None => return None,
-            }
-
-            match self.codebook.get(&code) {
-                Some(a) => {
-                    return Some(a.0.clone());
-                }
-                None => continue,
-            }
-        }
-    }
-}
-
-pub fn decode_iter<'a, S: Debug + Clone, W: Debug>(
-    codebook: &'a DecodeCodebook2<S, W>,
-    string: &'a str,
-) -> Decoder<'a, S, W> {
-    return Decoder {
-        codebook: codebook,
-        iterator: string.chars(),
-    };
-}
-
-pub fn decode_str<S: Debug + Clone + Eq + Hash, W: Debug>(
-    codebook: &DecodeCodebook2<S, W>,
-    string: &str,
-) -> Vec<S> {
-    return decode_iter(codebook, string).collect();
 }
 
 pub fn from_iter<
@@ -414,7 +404,7 @@ pub fn from_iter<
     I: Iterator<Item = (&'a S, &'a W)>,
 >(
     map: I,
-) -> (EncodeCodebook<S>, DecodeCodebook2<S, W>) {
+) -> (EncodeCodebook<S>, DecodeCodebook<S, W>) {
     let mut heap = match map.size_hint() {
         (_, Some(upper)) => BinaryHeap::with_capacity(upper),
         (lower, None) => BinaryHeap::with_capacity(lower),
@@ -444,12 +434,14 @@ mod tests {
         map.insert("a4", 5); // 10
 
         let (encode_book, _) = from_iter(map.iter());
-        assert_eq!(encode_symbols(&encode_book, &vec!["a1"]).join(""), "0");
-        assert_eq!(encode_symbols(&encode_book, &vec!["a2"]).join(""), "10");
-        assert_eq!(encode_symbols(&encode_book, &vec!["a3"]).join(""), "110");
-        assert_eq!(encode_symbols(&encode_book, &vec!["a4"]).join(""), "111");
+        assert_eq!(encode_book.encode_symbols(&vec!["a1"]).join(""), "0");
+        assert_eq!(encode_book.encode_symbols(&vec!["a2"]).join(""), "10");
+        assert_eq!(encode_book.encode_symbols(&vec!["a3"]).join(""), "110");
+        assert_eq!(encode_book.encode_symbols(&vec!["a4"]).join(""), "111");
         assert_eq!(
-            encode_symbols(&encode_book, &vec!["a1", "a2", "a3", "a4"]).join(""),
+            encode_book
+                .encode_symbols(&vec!["a1", "a2", "a3", "a4"])
+                .join(""),
             "010110111"
         );
     }
@@ -462,11 +454,13 @@ mod tests {
         map.insert("c", 1); // 11
 
         let (encode_book, _) = from_iter(map.iter());
-        assert_eq!(encode_symbols(&encode_book, &vec!["a"]).join(""), "0");
-        assert_eq!(encode_symbols(&encode_book, &vec!["b"]).join(""), "10");
-        assert_eq!(encode_symbols(&encode_book, &vec!["c"]).join(""), "11");
+        assert_eq!(encode_book.encode_symbols(&vec!["a"]).join(""), "0");
+        assert_eq!(encode_book.encode_symbols(&vec!["b"]).join(""), "10");
+        assert_eq!(encode_book.encode_symbols(&vec!["c"]).join(""), "11");
         assert_eq!(
-            encode_symbols(&encode_book, &vec!["a", "a", "a", "b", "c"]).join(""),
+            encode_book
+                .encode_symbols(&vec!["a", "a", "a", "b", "c"])
+                .join(""),
             "0001011"
         );
     }
@@ -479,10 +473,10 @@ mod tests {
         map.insert("c", 1); // 11
 
         let (_, decode_book) = from_iter(map.iter());
-        assert_eq!(decode_str(&decode_book, "0").join(""), "a");
-        assert_eq!(decode_str(&decode_book, "10").join(""), "b");
-        assert_eq!(decode_str(&decode_book, "11").join(""), "c");
-        assert_eq!(decode_str(&decode_book, "000101011").join(""), "aaabbc");
+        assert_eq!(decode_book.decode_str("0").join(""), "a");
+        assert_eq!(decode_book.decode_str("10").join(""), "b");
+        assert_eq!(decode_book.decode_str("11").join(""), "c");
+        assert_eq!(decode_book.decode_str("000101011").join(""), "aaabbc");
     }
 
     #[test]
@@ -494,9 +488,11 @@ mod tests {
         map.insert("d", 1); // 0
 
         let (_, decode_book) = from_iter(map.iter());
-        assert_eq!(decode_str(&decode_book, "111").join(""), "a");
+        assert_eq!(decode_book.decode_str("111").join(""), "a");
         assert_eq!(
-            decode_str(&decode_book, "11111111111111011011010100").join(""),
+            decode_book
+                .decode_str("11111111111111011011010100")
+                .join(""),
             "aaaabbbccd"
         );
     }
