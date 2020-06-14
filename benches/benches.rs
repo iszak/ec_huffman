@@ -697,11 +697,10 @@ fn bench_encode_decode(b: &mut Bencher) {
     for symbol in &example {
         buffer2 += ec_huffman::encode_symbol(&encode_book, *symbol).unwrap();
     }
-
     b.iter(|| {
         assert!(example
             .iter()
-            .zip(ec_huffman::decode_str(&decode_book, &buffer2))
+            .zip(ec_huffman::decode_iter(&decode_book, &buffer2))
             .all(|(l, r)| *l == &r));
     });
 }

@@ -5,12 +5,28 @@ use std::fmt::Debug;
 use std::hash::Hash;
 use std::iter::Iterator;
 use std::ops::Add;
+use std::str::Chars;
 
 use std::collections::BinaryHeap;
 use std::collections::HashMap;
 
 pub type EncodeCodebook<S> = HashMap<S, String>;
 pub type DecodeCodebook<S, W> = HashMap<String, (S, W)>;
+
+pub struct DecodeCodebook2<S, W> {
+    book: DecodeCodebook<S, W>,
+    max_code_len: usize,
+}
+
+impl<S, W> DecodeCodebook2<S, W> {
+    fn get(&self, code: &String) -> Option<&(S, W)> {
+        if code.len() > self.max_code_len {
+            return None;
+        }
+
+        return self.book.get(code);
+    }
+}
 
 #[derive(Debug)]
 struct Node<S, W> {
@@ -123,8 +139,6 @@ impl CodeGenerator {
     }
 }
 
-// TODO:
-// - Allow replacing code generator to allow Length-limited Huffman coding
 fn assign_code<S: Debug + Eq + Hash + Clone, W: Debug + Ord + Clone>(
     node: &Node<S, W>,
     encode_book: &mut EncodeCodebook<S>,
@@ -172,7 +186,7 @@ fn assign_codes<S: Debug + Clone + Eq + Hash, W: Debug + Clone + Ord>(
 fn create_books<S: Hash + Eq + Debug + Ord + Clone, W: Debug + Ord + Clone + Add<Output = W>>(
     frequency_table: BinaryHeap<HeapData<S, W>>,
     nodes: usize,
-) -> (EncodeCodebook<S>, DecodeCodebook<S, W>) {
+) -> (EncodeCodebook<S>, DecodeCodebook2<S, W>) {
     let len = frequency_table.len();
 
     // 1. Create a leaf node for each symbol and add it to the priority queue.
@@ -283,23 +297,32 @@ fn create_books<S: Hash + Eq + Debug + Ord + Clone, W: Debug + Ord + Clone + Add
         &mut code_generator,
     );
 
-    return (encode_book, decode_book);
+    let max_code_len = decode_book.keys().max_by_key(|k| k.len()).unwrap().len();
+
+    return (
+        encode_book,
+        DecodeCodebook2 {
+            book: decode_book,
+            max_code_len: max_code_len,
+        },
+    );
 }
 
-// TODO: Implement lazy iterator?
+pub fn encode_symbols_from_iter<'a, S: Eq + Debug + Clone + Hash, I: Iterator<Item = &'a S>>(
+    codebook: &'a EncodeCodebook<S>,
+    iter: &'a mut I,
+) -> Encoder<'a, S, I> {
+    return Encoder {
+        codebook: codebook,
+        iterator: iter,
+    };
+}
+
 pub fn encode_symbols<S: Eq + Debug + Clone + Hash>(
     codebook: &EncodeCodebook<S>,
     symbols: &Vec<S>,
 ) -> Vec<String> {
-    let mut output: Vec<String> = Vec::with_capacity(symbols.len());
-    for symbol in symbols {
-        match codebook.get(symbol) {
-            Some(code) => output.push(code.clone()),
-            None => panic!(format!("code {:?} doesn't exist", symbol)),
-        }
-    }
-
-    return output;
+    return encode_symbols_from_iter(codebook, &mut symbols.iter()).collect();
 }
 
 pub fn encode_symbol<'a, S: Eq + Debug + Clone + Hash>(
@@ -320,38 +343,68 @@ pub fn encode_symbol_from_buffer<'a, S: Eq + Debug + Clone + Hash>(
     };
 }
 
-pub fn decode_str<S: Debug + Clone, W: Debug>(
-    codebook: &DecodeCodebook<S, W>,
-    string: &str,
-) -> Vec<S> {
-    // TODO: Allocate vector of size string.len() / max_code_len() * max_symbol_len()
-    let mut output: Vec<S> = vec![];
+pub struct Encoder<'a, S, I: Iterator<Item = &'a S>> {
+    codebook: &'a EncodeCodebook<S>,
+    iterator: &'a mut I,
+}
 
-    // TODO: Cache on construction
-    let max_code_len = codebook.keys().max_by_key(|k| k.len()).unwrap().len();
+impl<'a, S: Clone + Eq + Hash, I: Iterator<Item = &'a S>> Iterator for Encoder<'a, S, I> {
+    type Item = String;
 
-    // TODO: Allocate string of size string.len() / max_code_len() * max_symbol_len()
-    let mut code: String = "".to_owned();
-    for c in string.chars() {
-        code.push(c);
-
-        if code.len() > max_code_len {
-            panic!(format!(
-                "code {:?} exceeds max code length {:?}",
-                code, max_code_len
-            ));
-        }
-
-        match codebook.get(&code) {
-            Some(a) => {
-                output.push(a.0.clone());
-                code = "".to_owned();
-            }
-            None => continue,
+    fn next(&mut self) -> Option<String> {
+        match self.iterator.next() {
+            Some(symbol) => match self.codebook.get(&symbol) {
+                Some(code) => Some(code.clone()),
+                None => None,
+            },
+            None => return None,
         }
     }
+}
 
-    return output;
+pub struct Decoder<'a, S: Clone, W> {
+    codebook: &'a DecodeCodebook2<S, W>,
+    iterator: Chars<'a>,
+}
+
+impl<'a, S: Clone, W> Iterator for Decoder<'a, S, W> {
+    type Item = S;
+
+    fn next(&mut self) -> Option<S> {
+        // TODO: Allocate string of size string.len() / max_code_len() * max_symbol_len()
+        let mut code: String = String::with_capacity(100);
+
+        loop {
+            match self.iterator.next() {
+                Some(c) => code.push(c),
+                None => return None,
+            }
+
+            match self.codebook.get(&code) {
+                Some(a) => {
+                    return Some(a.0.clone());
+                }
+                None => continue,
+            }
+        }
+    }
+}
+
+pub fn decode_iter<'a, S: Debug + Clone, W: Debug>(
+    codebook: &'a DecodeCodebook2<S, W>,
+    string: &'a str,
+) -> Decoder<'a, S, W> {
+    return Decoder {
+        codebook: codebook,
+        iterator: string.chars(),
+    };
+}
+
+pub fn decode_str<S: Debug + Clone + Eq + Hash, W: Debug>(
+    codebook: &DecodeCodebook2<S, W>,
+    string: &str,
+) -> Vec<S> {
+    return decode_iter(codebook, string).collect();
 }
 
 pub fn from_iter<
@@ -361,7 +414,7 @@ pub fn from_iter<
     I: Iterator<Item = (&'a S, &'a W)>,
 >(
     map: I,
-) -> (EncodeCodebook<S>, DecodeCodebook<S, W>) {
+) -> (EncodeCodebook<S>, DecodeCodebook2<S, W>) {
     let mut heap = match map.size_hint() {
         (_, Some(upper)) => BinaryHeap::with_capacity(upper),
         (lower, None) => BinaryHeap::with_capacity(lower),
