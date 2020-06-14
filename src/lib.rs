@@ -203,12 +203,31 @@ struct HeapData<S, W> {
     symbol: S,
 }
 
-struct CodeGenerator {
+pub trait CodeGenerator {
+    fn next(&mut self) -> String;
+    fn dive(&mut self);
+    fn alphabet_len(&mut self) -> usize;
+}
+
+pub struct BinaryCodeGenerator {
     last_code: u32,
     current_code: String,
 }
 
-impl CodeGenerator {
+impl BinaryCodeGenerator {
+    pub fn new() -> BinaryCodeGenerator {
+        BinaryCodeGenerator {
+            last_code: 1,
+            current_code: "".to_owned(),
+        }
+    }
+}
+
+impl CodeGenerator for BinaryCodeGenerator {
+    fn alphabet_len(&mut self) -> usize {
+        2
+    }
+
     fn next(&mut self) -> String {
         if self.last_code == 0 {
             self.last_code = 1;
@@ -232,7 +251,7 @@ fn assign_code<S: Debug + Eq + Hash + Clone, W: Debug + Ord + Clone>(
     node: &Node<S, W>,
     encode_book: &mut InternalEncodeCodebook<S>,
     decode_book: &mut InternalDecodeCodebook<S, W>,
-    code_generator: &mut CodeGenerator,
+    code_generator: &mut dyn CodeGenerator,
 ) -> () {
     let new_code = code_generator.next();
 
@@ -259,7 +278,7 @@ fn assign_codes<S: Debug + Clone + Eq + Hash, W: Debug + Clone + Ord>(
     node: &Node<S, W>,
     encode_book: &mut InternalEncodeCodebook<S>,
     decode_book: &mut InternalDecodeCodebook<S, W>,
-    code_generator: &mut CodeGenerator,
+    code_generator: &mut dyn CodeGenerator,
 ) -> () {
     for node_index in node.children.iter() {
         let child_node = nodes.get(*node_index).unwrap();
@@ -274,7 +293,7 @@ fn assign_codes<S: Debug + Clone + Eq + Hash, W: Debug + Clone + Ord>(
 
 fn create_books<S: Hash + Eq + Debug + Ord + Clone, W: Debug + Ord + Clone + Add<Output = W>>(
     frequency_table: BinaryHeap<HeapData<S, W>>,
-    nodes: usize,
+    code_generator: &mut dyn CodeGenerator,
 ) -> (EncodeCodebook<S>, DecodeCodebook<S, W>) {
     let len = frequency_table.len();
 
@@ -287,7 +306,7 @@ fn create_books<S: Hash + Eq + Debug + Ord + Clone, W: Debug + Ord + Clone + Add
 
     for (index, entry) in frequency_table.into_sorted_vec().iter().enumerate() {
         all_nodes.push(Node {
-            children: Vec::with_capacity(nodes),
+            children: Vec::with_capacity(code_generator.alphabet_len()),
             data: NodeData::Leaf(Leaf {
                 code: None,
                 symbol: entry.symbol.clone(),
@@ -315,11 +334,11 @@ fn create_books<S: Hash + Eq + Debug + Ord + Clone, W: Debug + Ord + Clone + Add
             _ => {
                 // 1. Remove the N nodes of highest priority (lowest probability) from the queue
                 let mut weight_accumulator: Option<W> = None;
-                let mut children: Vec<usize> = Vec::with_capacity(nodes);
+                let mut children: Vec<usize> = Vec::with_capacity(code_generator.alphabet_len());
 
                 let mut index = 0;
                 loop {
-                    if index == nodes {
+                    if index == code_generator.alphabet_len() {
                         break;
                     }
 
@@ -373,17 +392,13 @@ fn create_books<S: Hash + Eq + Debug + Ord + Clone, W: Debug + Ord + Clone + Add
 
     let mut encode_book: InternalEncodeCodebook<S> = InternalEncodeCodebook::with_capacity(len);
     let mut decode_book: InternalDecodeCodebook<S, W> = InternalDecodeCodebook::with_capacity(len);
-    let mut code_generator = CodeGenerator {
-        last_code: 1,
-        current_code: "".to_owned(),
-    };
 
     assign_codes(
         &all_nodes,
         &root_node,
         &mut encode_book,
         &mut decode_book,
-        &mut code_generator,
+        code_generator,
     );
 
     let max_code_len = decode_book.keys().max_by_key(|k| k.len()).unwrap().len();
@@ -404,6 +419,7 @@ pub fn from_iter<
     I: IntoIterator<Item = (&'a S, &'a W)> + ExactSizeIterator,
 >(
     iter: I,
+    code_generator: &mut dyn CodeGenerator,
 ) -> (EncodeCodebook<S>, DecodeCodebook<S, W>) {
     let mut heap = BinaryHeap::with_capacity(iter.len());
 
@@ -414,7 +430,7 @@ pub fn from_iter<
         });
     }
 
-    create_books(heap, 2)
+    create_books(heap, code_generator)
 }
 
 #[cfg(test)]
@@ -422,7 +438,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn encode1() {
+    fn binary_encode1() {
         // a1:0.4, a2:0.35, a3:0.2, a4:0.05
         let mut map: HashMap<&str, usize> = HashMap::new();
         map.insert("a1", 40); // 0
@@ -430,7 +446,7 @@ mod tests {
         map.insert("a3", 20); // 10
         map.insert("a4", 5); // 10
 
-        let (encode_book, _) = from_iter(map.iter());
+        let (encode_book, _) = from_iter(map.iter(), &mut BinaryCodeGenerator::new());
         assert_eq!(encode_book.encode_symbols(&vec!["a1"]).join(""), "0");
         assert_eq!(encode_book.encode_symbols(&vec!["a2"]).join(""), "10");
         assert_eq!(encode_book.encode_symbols(&vec!["a3"]).join(""), "110");
@@ -444,13 +460,13 @@ mod tests {
     }
 
     #[test]
-    fn encode2() {
+    fn binary_encode2() {
         let mut map: HashMap<&str, usize> = HashMap::new();
         map.insert("a", 3); // 0
         map.insert("b", 2); // 10
         map.insert("c", 1); // 11
 
-        let (encode_book, _) = from_iter(map.iter());
+        let (encode_book, _) = from_iter(map.iter(), &mut BinaryCodeGenerator::new());
         assert_eq!(encode_book.encode_symbols(&vec!["a"]).join(""), "0");
         assert_eq!(encode_book.encode_symbols(&vec!["b"]).join(""), "10");
         assert_eq!(encode_book.encode_symbols(&vec!["c"]).join(""), "11");
@@ -463,13 +479,13 @@ mod tests {
     }
 
     #[test]
-    fn decode_code_unique_weights() {
+    fn binary_decode_code_unique_weights() {
         let mut map: HashMap<&str, usize> = HashMap::new();
         map.insert("a", 3); // 0
         map.insert("b", 2); // 10
         map.insert("c", 1); // 11
 
-        let (_, decode_book) = from_iter(map.iter());
+        let (_, decode_book) = from_iter(map.iter(), &mut BinaryCodeGenerator::new());
         assert_eq!(decode_book.decode_str("0").join(""), "a");
         assert_eq!(decode_book.decode_str("10").join(""), "b");
         assert_eq!(decode_book.decode_str("11").join(""), "c");
@@ -477,14 +493,14 @@ mod tests {
     }
 
     #[test]
-    fn decode_code_duplicate_weights() {
+    fn binary_decode_code_duplicate_weights() {
         let mut map: HashMap<&str, usize> = HashMap::new();
         map.insert("a", 1); // 111
         map.insert("b", 1); // 110
         map.insert("c", 1); // 10
         map.insert("d", 1); // 0
 
-        let (_, decode_book) = from_iter(map.iter());
+        let (_, decode_book) = from_iter(map.iter(), &mut BinaryCodeGenerator::new());
         assert_eq!(decode_book.decode_str("111").join(""), "a");
         assert_eq!(
             decode_book

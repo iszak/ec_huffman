@@ -683,11 +683,13 @@ fn criterion_benchmark(c: &mut Criterion) {
     map.insert("ZY", 58);
     map.insert("ZZ", 25);
 
+    let mut code_generator = ec_huffman::BinaryCodeGenerator::new();
+
     c.bench_function("from_iter", |b| {
-        b.iter(|| ec_huffman::from_iter(map.iter()))
+        b.iter(|| ec_huffman::from_iter(map.iter(), &mut code_generator))
     });
 
-    let (encode_book, decode_book) = ec_huffman::from_iter(map.iter());
+    let (encode_book, decode_book) = ec_huffman::from_iter(map.iter(), &mut code_generator);
 
     let codes: Vec<&&str> = black_box(map.keys().collect());
     let mut buffer: Vec<&String> = black_box(Vec::new());
