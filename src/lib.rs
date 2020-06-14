@@ -78,8 +78,7 @@ impl<'a, S: Clone, W> Iterator for Decoder<'a, S, W> {
     type Item = S;
 
     fn next(&mut self) -> Option<S> {
-        // TODO: Allocate string of size string.len() / max_code_len() * max_symbol_len()
-        let mut code: String = String::with_capacity(100);
+        let mut code: String = String::with_capacity(self.codebook.max_code_len);
 
         loop {
             match self.iterator.next() {
