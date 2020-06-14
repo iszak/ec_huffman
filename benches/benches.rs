@@ -1,6 +1,6 @@
 #[macro_use]
 extern crate bencher;
-extern crate ec;
+extern crate ec_huffman;
 
 use bencher::{black_box, Bencher};
 use std::collections::HashMap;
@@ -684,21 +684,25 @@ fn bench_encode_decode(b: &mut Bencher) {
     map.insert("ZY", 58);
     map.insert("ZZ", 25);
 
-    let (encode_book, decode_book) = ec::from_iter(map.iter());
+    let (encode_book, decode_book) = ec_huffman::from_iter(map.iter());
 
     let c: Vec<&&str> = map.keys().collect();
     let example = black_box(c);
-    b.iter(|| {
-        let mut buffer: Vec<&String> = Vec::new();
-        for symbol in &example {
-            ec::encode_symbol_from_buffer(&encode_book, *symbol, &mut buffer);
-            //buffer += ec::encode_symbol(&encode_book, symbol).unwrap();
-        }
+    let mut buffer: Vec<&String> = Vec::new();
+    for symbol in &example {
+        ec_huffman::encode_symbol_from_buffer(&encode_book, *symbol, &mut buffer);
+    }
 
-        //assert!(example
-        //    .iter()
-        //    .zip(ec::decode_str(&decode_book, &buffer))
-        //    .all(|(l, r)| *l == r));
+    let mut buffer2 = String::new();
+    for symbol in &example {
+        buffer2 += ec_huffman::encode_symbol(&encode_book, *symbol).unwrap();
+    }
+
+    b.iter(|| {
+        assert!(example
+            .iter()
+            .zip(ec_huffman::decode_str(&decode_book, &buffer2))
+            .all(|(l, r)| *l == &r));
     });
 }
 
